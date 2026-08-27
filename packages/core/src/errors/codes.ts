@@ -31,6 +31,8 @@ export const STELLAR_ERROR_CODES = {
   SEQUENCE_MISMATCH: "SEQUENCE_MISMATCH",
   /** The bid was below what the network accepted for this ledger. */
   FEE_TOO_LOW: "FEE_TOO_LOW",
+  /** Horizon timed out while waiting for the transaction to be included in a ledger (504). The transaction may still succeed. Poll with the transaction hash to determine the outcome. */
+  TX_TIMEOUT: "TX_TIMEOUT",
   /** The requested ledger range predates what the RPC server still retains. */
   LEDGER_OUT_OF_RETENTION: "LEDGER_OUT_OF_RETENTION",
   /** Horizon rate-limited the request (429). */
@@ -68,6 +70,8 @@ export const DEFAULT_ERROR_MESSAGES: Record<StellarErrorCode, string> = {
     "The transaction's sequence number was out of date. Reload the source account and rebuild the transaction.",
   FEE_TOO_LOW:
     "The fee was too low for the current network conditions. Retry with a higher fee or feeMultiplier.",
+  TX_TIMEOUT:
+    "Horizon timed out before confirming whether the transaction was included in a ledger. The transaction may still have succeeded. Use the transaction hash to poll for the actual outcome.",
   LEDGER_OUT_OF_RETENTION:
     "The requested start ledger is older than this RPC server retains. Use a more recent ledger, or an archival RPC provider.",
   RATE_LIMITED: "Too many requests were sent to Horizon. Please slow down and try again.",

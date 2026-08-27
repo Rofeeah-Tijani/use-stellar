@@ -60,6 +60,12 @@ export function useClaimableBalance({
     } catch (err) {
       if (fetchId !== requestRef.current) return
       const stellarError = toStellarError(err)
+
+      // toStellarError may return null for abort errors
+      if (!stellarError) {
+        return
+      }
+
       // A 404 means the account has no claimable balances — treat as empty
       if (stellarError.code === "ACCOUNT_NOT_FOUND") {
         setBalances([])

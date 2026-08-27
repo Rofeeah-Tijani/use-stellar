@@ -51,6 +51,11 @@ export function useAccountExists({
 
       const stellarError = toStellarError(err)
 
+      // toStellarError may return null for abort errors
+      if (!stellarError) {
+        return
+      }
+
       if (stellarError.code === "ACCOUNT_NOT_FOUND") {
         setExists(false)
         setReason("not_funded")

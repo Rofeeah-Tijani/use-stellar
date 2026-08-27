@@ -59,6 +59,7 @@ export {
   toStellarError,
   isStellarError,
   isStellarErrorCode,
+  isAbortError,
   STELLAR_ERROR_CODES,
   DEFAULT_ERROR_MESSAGES,
 } from "./errors"

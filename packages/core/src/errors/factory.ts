@@ -129,24 +129,38 @@ function fromResultCodes(resultCodes: HorizonResultCodes): StellarErrorCode | un
 }
 
 /**
- * Normalise any thrown value into a typed {@link StellarError}.
+ * Returns `true` if the error is an abort error (user-triggered cancellation).
+ * Abort errors are not truly errors — they are deliberate cancellations, and
+ * should not be shown to the user as failures.
+ */
+export function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false
+
+  const e = error as Error
+  return e.name === "AbortError" || e.message?.includes("abort") === true
+}
+
+/**
+ * Normalize any thrown value into a typed {@link StellarError}.
  *
  * Mapping precedence (most specific first):
  *  1. Already a `StellarError` → returned unchanged.
- *  2. Horizon `result_codes` — operation codes first, then transaction codes.
- *  3. Horizon problem-details `type` URI (RFC 7807).
- *  4. HTTP status codes (`429` → rate limited, `404` → not found, `5xx`).
- *  5. Wallet message heuristics, anchored to phrases wallets actually emit.
- *  6. Transport/network failure heuristics.
- *  7. Fallback `UNKNOWN`, preserving the original message.
+ *  2. Abort error → returns `null` (deliberate cancellation, not an error).
+ *  3. HTTP 504 Gateway Timeout → returns `TX_TIMEOUT` with transaction hash.
+ *  4. Horizon `result_codes` — operation codes first, then transaction codes.
+ *  5. Horizon problem-details `type` URI (RFC 7807).
+ *  6. HTTP status codes (`429` → rate limited, `404` → not found, `5xx`).
+ *  7. Wallet message heuristics, anchored to phrases wallets actually emit.
+ *  8. Transport/network failure heuristics.
+ *  9. Fallback `UNKNOWN`, preserving the original message.
  *
- * Steps 2 to 4 read structured fields. The heuristics below them exist only
+ * Steps 4 to 6 read structured fields. The heuristics below them exist only
  * for errors that carry no structure at all — chiefly wallet extensions, which
  * throw plain `Error`s with no status and no body. They are deliberately
  * narrow: classification by substring is guessing, and a consumer branching on
  * `err.code` renders a wrong UI with full confidence when the guess is wrong.
  */
-export function toStellarError(error: unknown): StellarError {
+export function toStellarError(error: unknown): StellarError | null {
   // 1. Pass-through anything already typed.
   if (error instanceof StellarError) {
     return error
@@ -156,12 +170,24 @@ export function toStellarError(error: unknown): StellarError {
     return new StellarError(error.code, error.message, { raw: error })
   }
 
+  // 2. Abort errors are not failures — they are deliberate cancellations.
+  if (isAbortError(error)) {
+    return null
+  }
+
   const rawMessage = error instanceof Error ? error.message : String(error)
   const response = getResponse(error)
   const status = response?.status ?? response?.data?.status
   const resultCodes = response?.data?.extras?.result_codes
 
-  // 2. Horizon transaction result codes — the most actionable signal.
+  // 3. HTTP 504 Gateway Timeout is a special case: Horizon gave up waiting,
+  //    but the transaction may still be in the queue and could succeed.
+  //    This is NOT a failure — it is "unknown", and the caller must poll.
+  if (status === 504) {
+    return createStellarError("TX_TIMEOUT", undefined, { raw: error })
+  }
+
+  // 4. Horizon transaction result codes — the most actionable signal.
   if (resultCodes) {
     const code = fromResultCodes(resultCodes)
     if (code) {
@@ -169,13 +195,13 @@ export function toStellarError(error: unknown): StellarError {
     }
   }
 
-  // 3. Problem-details type URI — stable across message rewordings and locales.
+  // 5. Problem-details type URI — stable across message rewordings and locales.
   const problemCode = fromProblemType(getProblemType(response))
   if (problemCode) {
     return createStellarError(problemCode, undefined, { raw: error })
   }
 
-  // 4. HTTP status codes.
+  // 6. HTTP status codes.
   if (status === 429) {
     return createStellarError("RATE_LIMITED", undefined, { raw: error })
   }
@@ -183,11 +209,13 @@ export function toStellarError(error: unknown): StellarError {
     return createStellarError("ACCOUNT_NOT_FOUND", undefined, { raw: error })
   }
   if (typeof status === "number" && status >= 500) {
-    // 502/503/504 are the gateway giving up, not the ledger rejecting anything.
+    // 502/503 are the gateway giving up, not the ledger rejecting anything.
+    // They are different from 504: these are immediate failures, whereas 504
+    // means "I started the work but gave up waiting for the result".
     return createStellarError("NETWORK_ERROR", undefined, { raw: error })
   }
 
-  // 5. Wallet message heuristics.
+  // 7. Wallet message heuristics.
   //
   // Only for errors with no structure to read — wallet extensions throw plain
   // `Error`s. The phrases are anchored to what wallets actually emit. A bare
@@ -218,20 +246,18 @@ export function toStellarError(error: unknown): StellarError {
     return createStellarError("WALLET_NOT_INSTALLED", undefined, { raw: error })
   }
 
-  // 6. Transport/network failures.
+  // 8. Transport/network failures (but not timeout messages that might be 504).
   if (
     lower.includes("network error") ||
     lower.includes("network request failed") ||
     lower.includes("failed to fetch") ||
     lower.includes("econnrefused") ||
     lower.includes("econnreset") ||
-    lower.includes("enotfound") ||
-    lower.includes("timeout") ||
-    lower.includes("timed out")
+    lower.includes("enotfound")
   ) {
     return createStellarError("NETWORK_ERROR", undefined, { raw: error })
   }
 
-  // 7. Fallback — keep the original message so nothing is silently swallowed.
+  // 9. Fallback — keep the original message so nothing is silently swallowed.
   return createStellarError("UNKNOWN", rawMessage || undefined, { raw: error })
 }

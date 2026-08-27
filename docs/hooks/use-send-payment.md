@@ -316,6 +316,106 @@ If the user approves, Freighter signs the transaction and returns it to
 closes the popup, `send()` throws a `StellarError` with the code
 `WALLET_REQUEST_REJECTED` and nothing is submitted.
 
+## What to do on timeout (HTTP 504)
+
+When Horizon receives a transaction, it holds the connection open while waiting
+for the transaction to be included in a ledger. Ledgers close every ~5 seconds,
+but under load Horizon gives up first and returns **HTTP 504 Gateway Timeout**
+— while the transaction is still in the queue and may succeed in the next ledger.
+
+**A 504 means "I don't know", not "it failed".** Treating it as a failure and
+retrying can cause a double-send, where both transactions succeed and the user
+pays twice.
+
+### How this library handles 504
+
+When `send()` receives a 504, it throws a `StellarError` with:
+- `code: "TX_TIMEOUT"`
+- `hash: "<transaction_hash>"` — the hash is computed **before** submission, so it's available even when Horizon times out.
+
+The transaction may still succeed. Use the hash to poll `useTransaction(hash)`
+and find out what actually happened.
+
+### Example: polling after timeout
+
+```tsx
+import { useSendPayment, useTransaction } from "use-stellar"
+import { useState } from "react"
+
+function SendWithTimeoutHandling() {
+  const { send, loading, error } = useSendPayment()
+  const [pollHash, setPollHash] = useState<string | null>(null)
+  
+  // Poll for the transaction status if we have a hash
+  const { transaction } = useTransaction({ hash: pollHash })
+
+  const handleSend = async () => {
+    try {
+      await send({
+        to: "GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3B2WSQHG4W37",
+        asset: "XLM",
+        amount: "10",
+      })
+    } catch (err: any) {
+      if (err.code === "TX_TIMEOUT") {
+        // Set the hash so useTransaction starts polling
+        setPollHash(err.hash)
+      }
+    }
+  }
+
+  if (pollHash && transaction) {
+    if (transaction.status === "success") {
+      return <p>Payment succeeded! Hash: {pollHash}</p>
+    }
+    if (transaction.status === "failed") {
+      return <p>Payment failed. Safe to retry with a new transaction.</p>
+    }
+  }
+
+  if (pollHash) {
+    return <p>Horizon timed out. Checking if the payment succeeded...</p>
+  }
+
+  return (
+    <div>
+      <button onClick={handleSend} disabled={loading}>
+        {loading ? "Sending..." : "Send 10 XLM"}
+      </button>
+      {error && error.code !== "TX_TIMEOUT" && (
+        <p>Error: {error.message}</p>
+      )}
+    </div>
+  )
+}
+```
+
+### Why resubmitting is dangerous
+
+The Stellar protocol's safeguard is the sequence number. Each transaction is
+bound to one, and the network rejects any second transaction reusing it.
+
+- **Safe:** Resubmitting the identical signed envelope. It's either the same
+  transaction (a no-op) or rejected as a duplicate sequence number.
+- **Unsafe:** Building a new transaction and signing it fresh. This gets a
+  **new sequence number**, and the network will happily execute both
+  transactions if the first one succeeded.
+
+This library does not currently provide a retry helper. If you need one, it
+must resubmit the identical signed XDR, never rebuild with fresh options.
+
+### When tx_bad_seq means it's safe to retry
+
+If you receive `SEQUENCE_MISMATCH` (transaction result code `tx_bad_seq`), it
+means the transaction definitively did **not** execute. In this case, it is
+safe to:
+1. Reload the source account with `useAccount` to get the current sequence number
+2. Build a completely new transaction
+3. Sign and submit again
+
+`tx_bad_seq` is the network's explicit confirmation that your sequence number
+was wrong and nothing happened.
+
 ## TypeScript
 
 ```ts
@@ -351,6 +451,8 @@ interface UseSendPaymentReturn {
 | `INSUFFICIENT_BALANCE`      | The source account does not hold enough of the asset to send.       | Reduce the amount, or fund the account with more of the asset.      |
 | `NO_TRUSTLINE`               | The destination account has not established a trustline for the asset. | The destination must add a trustline for the asset before you can send it. Does not apply to XLM. |
 | `TRANSACTION_FAILED`        | The transaction was submitted but rejected by the network.          | Check `error.raw` for the underlying Horizon response and inspect the failure reason. |
+| `TX_TIMEOUT`                | Horizon timed out (504) before confirming the transaction was included in a ledger. The transaction may still succeed. | Use the transaction hash (`error.hash`) to poll `useTransaction(hash)` and determine the actual outcome. See [What to do on timeout](#what-to-do-on-timeout-http-504). |
+| `SEQUENCE_MISMATCH`         | The transaction's sequence number did not match the source account's current sequence. | This means the transaction definitively did not execute. Reload the account and rebuild the transaction with the correct sequence number. |
 | `RATE_LIMITED`               | Horizon rate-limited the request.                                    | Wait before retrying. Avoid calling `send()` in a tight loop.       |
 | `VALIDATION_ERROR`          | Input was invalid, or `send()` was called outside a browser (e.g. during server-side rendering). | Move the calling component behind a `"use client"` boundary in Next.js / Remix, and validate input before calling `send()`. |
 | `NETWORK_ERROR`              | A transport-level failure — offline, DNS, timeout, or CORS.          | Check the user's network connection and retry.                      |

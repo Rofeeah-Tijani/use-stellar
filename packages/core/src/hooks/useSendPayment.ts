@@ -4,7 +4,12 @@ import { useStellarContext } from "../context/StellarProvider"
 import { getHorizonServer, isNativeAsset, isIssuedAsset, isBrowser } from "../utils"
 import { asFeeSource, resolveFee } from "../utils/fees"
 import { getWalletAdapter } from "../wallets"
-import { createStellarError, toStellarError, toSubmissionError } from "../errors"
+import {
+  createStellarError,
+  toStellarError,
+  toSubmissionError,
+  StellarError as StellarErrorClass,
+} from "../errors"
 import type { SendPaymentOptions, SendPaymentResult, Asset, StellarError } from "../types"
 
 export interface UseSendPaymentReturn {
@@ -74,6 +79,8 @@ export function useSendPayment(): UseSendPaymentReturn {
       setError(null)
       setResult(null)
 
+      let txHash = ""
+
       try {
         const server = getHorizonServer(networkConfig)
         const sourceAcc = await server.loadAccount(wallet.address)
@@ -100,6 +107,12 @@ export function useSendPayment(): UseSendPaymentReturn {
 
         builder.setTimeout(30)
         const tx = builder.build()
+
+        // Compute the transaction hash BEFORE submission so it is available
+        // even if Horizon times out (504). The hash is deterministic from the
+        // signed envelope, so we can return it on timeout and let the caller
+        // poll useTransaction(hash) to find out what actually happened.
+        txHash = tx.hash().toString("hex")
         const xdr = tx.toXDR()
 
         // Sign & submit via the active wallet's adapter
@@ -131,6 +144,30 @@ export function useSendPayment(): UseSendPaymentReturn {
         return outcome
       } catch (err) {
         const stellarError = toStellarError(err)
+
+        // If toStellarError returns null, it was an abort (deliberate cancellation).
+        // Don't set error state for aborts.
+        if (!stellarError) {
+          return { hash: "", status: "failed", error: "Request was cancelled" }
+        }
+
+        // On TX_TIMEOUT (504), we have the hash but don't know the outcome yet.
+        // Return the hash so the caller can poll useTransaction(hash).
+        if (stellarError.code === "TX_TIMEOUT") {
+          const timeoutOutcome: SendPaymentResult = {
+            hash: txHash,
+            status: "pending",
+          }
+          setResult(timeoutOutcome)
+          setError(stellarError)
+          // Attach the hash to the error so it's accessible
+          const errorWithHash = new StellarErrorClass(stellarError.code, stellarError.message, {
+            raw: stellarError.raw,
+            hash: txHash,
+          })
+          throw errorWithHash
+        }
+
         setError(stellarError)
         throw stellarError
       } finally {

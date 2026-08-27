@@ -80,10 +80,11 @@ export async function resolveFee(server: FeeSource, options: FeeOptions = {}): P
     // not read the current one is how a transaction fails under congestion
     // with nothing to explain why.
     const cause = toStellarError(err)
+    const causeMessage = cause?.message ?? "Unknown error"
     throw createStellarError(
       "NETWORK_ERROR",
       "Could not fetch the current network base fee, so no fee could be chosen. " +
-        `Pass an explicit \`fee\` to proceed without Horizon. (${cause.message})`,
+        `Pass an explicit \`fee\` to proceed without Horizon. (${causeMessage})`,
       { raw: err }
     )
   }

@@ -182,6 +182,7 @@ Here are solutions to common integration and runtime errors:
 | `Wrong network. Switch Freighter to...` | Freighter is set to Mainnet (or another network) while `StellarProvider` is configured to `testnet` (or vice versa). | Open Freighter settings, select **Preferences** -> **Active Network**, and select the network configured in `StellarProvider`. |
 | `Failed to fetch balance` | The Stellar address has not been funded yet and does not exist on the ledger. | Use the [Stellar Lab Friendbot](https://laboratory.stellar.org/#friendbot) to fund the address with testnet XLM before attempting to read its balance. |
 | `Transaction failed` (e.g., during payment) | Insufficient balance, invalid destination address, missing asset trustline, or network timeout. | 1. Ensure the sender has enough XLM to cover the payment amount and the base transaction fee (0.00001 XLM).<br>2. Confirm the destination address is valid and exists on the active network.<br>3. Check developer console logs for the specific transaction error XDR. |
+| `TX_TIMEOUT` (HTTP 504 Gateway Timeout) | Horizon timed out waiting for ledger inclusion, but the transaction may still succeed. | The error includes a transaction hash. Poll `useTransaction(hash)` to check the actual status. Never rebuild and resubmit — the original transaction may have landed. See [useSendPayment docs](docs/hooks/use-send-payment.md#what-to-do-on-timeout-http-504) for a worked example. |
 
 ---
 

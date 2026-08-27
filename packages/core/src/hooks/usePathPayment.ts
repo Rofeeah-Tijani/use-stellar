@@ -89,7 +89,9 @@ function toPathPaymentError(error: unknown, mode: PathPaymentOptions["mode"]): S
     )
   }
 
-  return toStellarError(error)
+  const stellarError = toStellarError(error)
+  // toStellarError may return null for abort errors - convert to UNKNOWN
+  return stellarError ?? createStellarError("UNKNOWN", "An unknown error occurred", { raw: error })
 }
 
 /**
